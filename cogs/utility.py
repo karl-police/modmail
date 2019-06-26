@@ -22,7 +22,7 @@ from pkg_resources import parse_version
 
 from core import checks
 from core.changelog import Changelog
-from core.decorators import github_access_token_required, trigger_typing
+from core.decorators import trigger_typing
 from core.models import InvalidConfigError, PermissionLevel
 from core.paginator import PaginatorSession, MessagePaginatorSession
 from core.utils import cleanup_code, info, error, User, get_perm_level
@@ -78,13 +78,24 @@ class ModmailHelpCommand(commands.HelpCommand):
     def process_help_msg(self, help_: str):
         return help_.format(prefix=self.clean_prefix) if help_ else "No help message."
 
-    async def send_bot_help(self, mapping):
+    async def send_bot_help(self, cogs):
         embeds = []
         # TODO: Implement for no cog commands
-        for cog in sorted(
-            (key for key in mapping.keys() if key is not None),
-            key=lambda c: c.qualified_name,
-        ):
+
+        cogs = list(filter(None, cogs))
+
+        bot = self.context.bot
+        
+        # always come first
+        default_cogs = [ 
+            bot.get_cog("Modmail"),
+            bot.get_cog("Utility"),
+            bot.get_cog("Plugins"),
+        ]
+        
+        default_cogs.extend(c for c in cogs if c not in default_cogs)
+
+        for cog in default_cogs:
             embeds.extend(await self.format_cog_help(cog))
 
         p_session = PaginatorSession(
@@ -285,9 +296,12 @@ class Utility(commands.Cog):
     async def debug(self, ctx):
         """Shows the recent application-logs of the bot."""
 
+        log_file_name = self.bot.config.token.split(".")[0]
+
         with open(
             os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "../temp/logs.log"
+                os.path.dirname(os.path.abspath(__file__)),
+                f"../temp/{log_file_name}.log",
             ),
             "r+",
         ) as f:
@@ -338,10 +352,12 @@ class Utility(commands.Cog):
         """Posts application-logs to Hastebin."""
 
         haste_url = os.environ.get("HASTE_URL", "https://hasteb.in")
+        log_file_name = self.bot.config.token.split(".")[0]
 
         with open(
             os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "../temp/logs.log"
+                os.path.dirname(os.path.abspath(__file__)),
+                f"../temp/{log_file_name}.log",
             ),
             "r+",
         ) as f:
@@ -372,9 +388,13 @@ class Utility(commands.Cog):
     @trigger_typing
     async def debug_clear(self, ctx):
         """Clears the locally cached logs."""
+
+        log_file_name = self.bot.config.token.split(".")[0]
+
         with open(
             os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "../temp/logs.log"
+                os.path.dirname(os.path.abspath(__file__)),
+                f"../temp/{log_file_name}.log",
             ),
             "w",
         ):
@@ -384,102 +404,7 @@ class Utility(commands.Cog):
                 color=self.bot.main_color, description="Cached logs are now cleared."
             )
         )
-
-    @commands.command()
-    @checks.has_permissions(PermissionLevel.OWNER)
-    @github_access_token_required
-    @trigger_typing
-    async def github(self, ctx):
-        """Shows the GitHub user your Github_Access_Token is linked to."""
-        data = await self.bot.api.get_user_info()
-
-        embed = Embed(
-            title="GitHub", description="Current User", color=self.bot.main_color
-        )
-        user = data["user"]
-        embed.set_author(
-            name=user["username"], icon_url=user["avatar_url"], url=user["url"]
-        )
-        embed.set_thumbnail(url=user["avatar_url"])
-        await ctx.send(embed=embed)
-
-    @commands.command()
-    @checks.has_permissions(PermissionLevel.OWNER)
-    @github_access_token_required
-    @trigger_typing
-    async def update(self, ctx, *, flag: str = ""):
-        """
-        Update Modmail.
-
-        This only works for Heroku users who have configured their bot for updates.
-
-        To stay up-to-date with the latest commit
-        from GitHub, specify "force" as the flag.
-        """
-
-        changelog = await Changelog.from_url(self.bot)
-        latest = changelog.latest_version
-
-        desc = (
-            f"The latest version is [`{self.bot.version}`]"
-            "(https://github.com/kyb3r/modmail/blob/master/bot.py#L25)"
-        )
-
-        if (
-            parse_version(self.bot.version) >= parse_version(latest.version)
-            and flag.lower() != "force"
-        ):
-            embed = Embed(
-                title="Already up to date", description=desc, color=self.bot.main_color
-            )
-
-            data = await self.bot.api.get_user_info()
-            if not data.get("error"):
-                user = data["user"]
-                embed.set_author(
-                    name=user["username"], icon_url=user["avatar_url"], url=user["url"]
-                )
-        else:
-            data = await self.bot.api.update_repository()
-
-            commit_data = data["data"]
-            user = data["user"]
-
-            if commit_data:
-                embed = Embed(color=self.bot.main_color)
-
-                embed.set_footer(
-                    text=f"Updating Modmail v{self.bot.version} "
-                    f"-> v{latest.version}"
-                )
-
-                embed.set_author(
-                    name=user["username"] + " - Updating bot",
-                    icon_url=user["avatar_url"],
-                    url=user["url"],
-                )
-
-                embed.description = latest.description
-                for name, value in latest.fields.items():
-                    embed.add_field(name=name, value=value)
-                # message = commit_data['commit']['message']
-                html_url = commit_data["html_url"]
-                short_sha = commit_data["sha"][:6]
-                embed.add_field(
-                    name="Merge Commit", value=f"[`{short_sha}`]({html_url})"
-                )
-            else:
-                embed = Embed(
-                    title="Already up to date with master repository.",
-                    description="No further updates required",
-                    color=self.bot.main_color,
-                )
-                embed.set_author(
-                    name=user["username"], icon_url=user["avatar_url"], url=user["url"]
-                )
-
-        return await ctx.send(embed=embed)
-
+        
     @commands.command(aliases=["presence"])
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def activity(self, ctx, activity_type: str.lower, *, message: str = ""):
@@ -663,7 +588,7 @@ class Utility(commands.Cog):
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             self.presence = await self.set_presence()
-            await asyncio.sleep(3600)
+            await asyncio.sleep(600)
 
     @commands.command()
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
@@ -1328,7 +1253,10 @@ class Utility(commands.Cog):
     )
     @checks.has_permissions(PermissionLevel.OWNER)
     async def oauth(self, ctx):
-        """Commands relating to Logviewer oauth2 login authentication."""
+        """Commands relating to Logviewer oauth2 login authentication.
+        
+        This functionality on your logviewer site is a [**Patron**](https://patreon.com/kyber) only feature.
+        """
         await ctx.send_help(ctx.command)
 
     @oauth.command(name="whitelist")
@@ -1352,6 +1280,12 @@ class Utility(commands.Cog):
 
         embed = Embed(color=self.bot.main_color)
         embed.title = "Success"
+
+        if not hasattr(target, "mention"):
+            target = self.bot.get_user(target.id) or self.bot.modmail_guild.get_role(
+                target.id
+            )
+
         embed.description = (
             f"{'Un-w' if removed else 'W'}hitelisted " f"{target.mention} to view logs."
         )
